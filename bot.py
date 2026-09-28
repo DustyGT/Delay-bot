@@ -36,6 +36,15 @@ async def keep_alive_ping():
                 print(f"Self-ping error: {e}")
             await asyncio.sleep(600)
 
+async def daily_decay_task():
+    """Decrements the delay counter for all servers by 1 every 24 hours."""
+    while True:
+        await asyncio.sleep(86400)  # Wait 24 hours (86,400 seconds)
+        for guild_id in list(server_delays.keys()):
+            if server_delays[guild_id] > 0:
+                server_delays[guild_id] -= 1
+                print(f"Decayed server {guild_id} counter to {server_delays[guild_id]}")
+
 # Enable message permissions
 intents = discord.Intents.default()
 intents.message_content = True
@@ -156,6 +165,7 @@ async def setdelay(ctx, amount: int):
 async def main():
     await start_web_server()
     asyncio.create_task(keep_alive_ping())
+    asyncio.create_task(daily_decay_task())
     token = os.environ.get("DISCORD_TOKEN")
     if not token:
         raise ValueError("DISCORD_TOKEN environment variable is missing!")
@@ -163,3 +173,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
