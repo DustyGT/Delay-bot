@@ -130,5 +130,7 @@ async def setdelay(ctx, amount: int):
     await ctx.send(f"Delay counter set to **{delay_days} day(s)**.")
 
 # Run bot (Replace with your token)
-bot.run("DISCORD_TOKEN")
+import os
+bot.run(os.environ['DISCORD_TOKEN'])
+
 
