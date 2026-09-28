@@ -2,8 +2,23 @@ import asyncio
 import re
 import datetime
 import random
+import os
 import discord
 from discord.ext import commands
+from aiohttp import web
+
+# ---------------- DUMMY HTTP SERVER FOR RENDER ----------------
+async def handle(request):
+    return web.Response(text="Delay-bot is active!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 # Enable message permissions
 intents = discord.Intents.default()
@@ -129,8 +144,14 @@ async def setdelay(ctx, amount: int):
     delay_days = amount
     await ctx.send(f"Delay counter set to **{delay_days} day(s)**.")
 
-# Run bot (Replace with your token)
-import os
-bot.run(os.environ['DISCORD_TOKEN'])
+# ---------------- STARTUP EXECUTION ----------------
+async def main():
+    await start_web_server()
+    token = os.environ.get("DISCORD_TOKEN")
+    if not token:
+        raise ValueError("DISCORD_TOKEN environment variable is missing!")
+    await bot.start(token)
 
-
+if __name__ == "__main__":
+    asyncio.run(main())
+    
