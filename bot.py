@@ -104,7 +104,7 @@ async def on_message(message):
                 response = await event_loop.run_in_executor(
                     None,
                     lambda: ai.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-1.5-flash",
                         contents=prompt,
                         config=GenerateContentConfig(
                             system_instruction=DERRICK_INSTRUCTIONS,
