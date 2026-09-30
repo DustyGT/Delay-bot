@@ -1,117 +1,85 @@
 import asyncio
-import re
-import random
 import os
+import re
 import discord
 from discord.ext import commands
 from aiohttp import web, ClientSession
+from google import genai
+from google.genai.types import GenerateContentConfig, HarmCategory, HarmBlockThreshold
 
-# ---------------- DUMMY HTTP SERVER & SELF-PINGER ----------------
-async def handle(request):
-    return web.Response(text="Delay-bot is active!")
+# ---------------- WEB SERVER & KEEP-ALIVE ----------------
+async def handle_ping(request):
+    return web.Response(text="Derrick Hutchinson bot is online.")
 
-async def start_web_server():
+async def run_web_server():
     app = web.Application()
-    app.router.add_get("/", handle)
+    app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-async def keep_alive_ping():
-    """Pings its own Render URL every 10 minutes to prevent sleeping."""
+async def self_ping_loop():
+    """Keeps the Render web service awake by pinging its public URL."""
     await asyncio.sleep(10)
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not render_url:
-        print("No RENDER_EXTERNAL_URL found, self-ping disabled.")
+        print("No RENDER_EXTERNAL_URL configured; skipping self-ping loop.")
         return
 
     async with ClientSession() as session:
         while True:
             try:
                 async with session.get(render_url) as response:
-                    print(f"Self-ping status: {response.status}")
-            except Exception as e:
-                print(f"Self-ping error: {e}")
+                    print(f"Keep-alive heartbeat status: {response.status}")
+            except Exception as error:
+                print(f"Keep-alive heartbeat error: {error}")
             await asyncio.sleep(600)
 
-async def daily_decay_task():
-    """Decrements the delay counter for all servers by 1 every 24 hours."""
-    while True:
-        await asyncio.sleep(86400)  # Wait 24 hours (86,400 seconds)
-        for guild_id in list(server_delays.keys()):
-            if server_delays[guild_id] > 0:
-                server_delays[guild_id] -= 1
-                print(f"Decayed server {guild_id} counter to {server_delays[guild_id]}")
-
-# Enable message permissions
+# ---------------- BOT & GEMINI INITIALIZATION ----------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Per-server counter storage: { guild_id: delay_days }
-server_delays = {}
+gemini_key = os.environ.get("GEMINI_API_KEY")
+if not gemini_key:
+    raise ValueError("Missing GEMINI_API_KEY environment variable!")
 
-def get_delay(guild_id: int) -> int:
-    return server_delays.get(guild_id, 0)
+ai = genai.Client(api_key=gemini_key)
 
-def set_delay(guild_id: int, amount: int):
-    server_delays[guild_id] = amount
+DERRICK_INSTRUCTIONS = (
+    "You are Derrick Hutchinson from Southwest Harbor, Maine (Mount Desert Island / MDI). "
+    "Your son is Stanley, and he goes to Pemetic Elementary School. "
+    "You are a regular guy chatting in a Discord server—talk totally normal, grounded, and casual. "
+    "Never act like a robotic AI assistant or start messages with greetings like 'Hello! How can I help you today?'. "
+    "You can use profane/swearing words naturally when conversing, but you must NEVER use slurs or hate speech of any kind. "
+    "If anyone asks for a story, make up stories set around Southwest Harbor/MDI featuring your son Stanley or his school Pemetic Elementary."
+)
 
-SPICY_RESPONSES = [
-    "bro... asking for the release date literally adds another day to the wait. read the rules bro",
-    "congrats, you just delayed the game by another day. hope you're happy now. read the rules!",
-    "another one asking for an ETA? that's +1 day on the clock.",
-    "devs just pushed the release back a whole day because of this question. check the rules next time 🤦‍♂️",
-    "stop asking when it's dropping! adding 1 day to the delay counter right now.",
-    "every time someone asks 'when release', a dev cries and delays the game 1 day.",
-    "did you really just ask for the release? +1 day penalty issued. read the rules channel!"
+SAFETY_RULES = [
+    {
+        "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        "threshold": HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
+    },
+    {
+        "category": HarmCategory.HARM_CATEGORY_HARASSMENT,
+        "threshold": HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+        "category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        "threshold": HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+        "category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
 ]
 
-# ---------------- BEGGING & ETA DETECTION ----------------
-BEGGING_PHRASES = [
-    r"\bpls\b", r"\bplease\b", r"\bplz\b", r"\bgimme\b", r"\bgive me\b",
-    r"\bneed\b", r"\bwant\b", r"\bcan i get\b", r"\bwhere is\b", r"\bwher is\b"
-]
-
-INSTANT_TRIGGERS = [
-    r"\brelease date\b", r"\brelease-date\b", r"\blaunch date\b",
-    r"\bwhen out\b", r"\bwen out\b", r"\bwhen release\b", r"\bwen release\b",
-    r"\bwhen is it out\b", r"\bwhen is game out\b", r"\bwhen game out\b",
-    r"\bapk link\b", r"\bdownload link\b", r"\bis it out yet\b", r"\bis it ready\b",
-    r"\bapk drop\b", r"\bgame drop\b", r"\bwhen drop\b", r"\bwhen will it drop\b"
-]
-
-ETA_QUESTIONS = ["when", "wen", "whens", "what time", "how long until", "how long till"]
-RELEASE_TARGETS = ["game", "apk", "demo", "beta", "update", "build", "mod", "patch", "download"]
-RELEASE_ACTIONS = ["come out", "coming out", "release", "released", "releasing", "launch", "drop", "dropping", "ready", "done", "available"]
-
-def is_asking_about_release(text: str) -> bool:
-    clean = re.sub(r"[^\w\s]", "", text.lower())
-
-    # 1. Exact ETA trigger phrases
-    for trigger in INSTANT_TRIGGERS:
-        if re.search(trigger, clean):
-            return True
-
-    # 2. Begging / ETA asking patterns
-    has_eta_q = any(re.search(rf"\b{q}\b", clean) for q in ETA_QUESTIONS)
-    has_target = any(re.search(rf"\b{t}\b", clean) for t in RELEASE_TARGETS)
-    has_action = any(re.search(rf"\b{a}\b", clean) for a in RELEASE_ACTIONS)
-    has_begging = any(re.search(rf"\b{b}\b", clean) for b in BEGGING_PHRASES)
-
-    if has_eta_q and (has_target or has_action):
-        return True
-
-    if has_begging and (has_target or has_action):
-        return True
-
-    return False
-
+# ---------------- DISCORD EVENT HANDLERS ----------------
 @bot.event
 async def on_ready():
-    print(f"Bot is ONLINE as {bot.user.name}!")
+    print(f"Logged in as {bot.user.name} ({bot.user.id})")
 
 @bot.event
 async def on_message(message):
@@ -122,54 +90,50 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    if is_asking_about_release(message.content):
-        guild_id = message.guild.id
-        current_delay = get_delay(guild_id) + 1
-        set_delay(guild_id, current_delay)
+    # Trigger logic: @mention, direct reply, or mentioning the name "Derrick"
+    mentioned = bot.user.mentioned_in(message)
+    is_reply = message.reference and message.reference.resolved and message.reference.resolved.author == bot.user
+    name_check = bool(re.search(r"\bderrick\b", message.content, re.IGNORECASE))
 
-        reply_text = random.choice(SPICY_RESPONSES)
+    if mentioned or is_reply or name_check:
+        async with message.channel.typing():
+            try:
+                prompt = message.clean_content.replace(f"@{bot.user.name}", "").strip()
 
-        embed = discord.Embed(
-            title="🛑 Game Delayed!",
-            description=f"{message.author.mention} {reply_text}",
-            color=discord.Color.red()
-        )
-        embed.add_field(
-            name="Total Delay Counter",
-            value=f"**{current_delay} day(s)** added so far.",
-            inline=False
-        )
+                event_loop = asyncio.get_running_loop()
+                response = await event_loop.run_in_executor(
+                    None,
+                    lambda: ai.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=GenerateContentConfig(
+                            system_instruction=DERRICK_INSTRUCTIONS,
+                            safety_settings=SAFETY_RULES
+                        )
+                    )
+                )
 
-        await message.channel.send(embed=embed)
+                output = response.text
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def adddelay(ctx, amount: int = 1):
-    current = get_delay(ctx.guild.id) + amount
-    set_delay(ctx.guild.id, current)
-    await ctx.send(f"Added {amount} day(s)! Current delay for this server: **{current} day(s)**.")
+                # Split message into chunks if it exceeds Discord's 2,000 char limit
+                if len(output) > 2000:
+                    for chunk in [output[i:i+1900] for i in range(0, len(output), 1900)]:
+                        await message.reply(chunk)
+                else:
+                    await message.reply(output)
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def removedelay(ctx, amount: int = 1):
-    current = max(0, get_delay(ctx.guild.id) - amount)
-    set_delay(ctx.guild.id, current)
-    await ctx.send(f"Removed {amount} day(s)! Current delay for this server: **{current} day(s)**.")
+            except Exception as err:
+                print(f"Error during execution: {err}")
+                await message.reply("Damn, ran into a quick issue. Try asking again.")
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setdelay(ctx, amount: int):
-    set_delay(ctx.guild.id, amount)
-    await ctx.send(f"Delay counter set to **{amount} day(s)** for this server.")
-
+# ---------------- ENTRY POINT ----------------
 async def main():
-    await start_web_server()
-    asyncio.create_task(keep_alive_ping())
-    asyncio.create_task(daily_decay_task())
-    token = os.environ.get("DISCORD_TOKEN")
-    if not token:
-        raise ValueError("DISCORD_TOKEN environment variable is missing!")
-    await bot.start(token)
+    await run_web_server()
+    asyncio.create_task(self_ping_loop())
+    discord_token = os.environ.get("DISCORD_TOKEN")
+    if not discord_token:
+        raise ValueError("Missing DISCORD_TOKEN environment variable!")
+    await bot.start(discord_token)
 
 if __name__ == "__main__":
     asyncio.run(main())
