@@ -79,15 +79,12 @@ async def on_message(message):
                 if not prompt:
                     prompt = "Hey Derrick"
 
-                event_loop = asyncio.get_running_loop()
-                response = await event_loop.run_in_executor(
-                    None,
-                    lambda: ai.models.generate_content(
-                        model="gemini-1.5-flash",
-                        contents=prompt,
-                        config=GenerateContentConfig(
-                            system_instruction=DERRICK_INSTRUCTIONS
-                        )
+                # Async call using native client.aio
+                response = await ai.aio.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=GenerateContentConfig(
+                        system_instruction=DERRICK_INSTRUCTIONS
                     )
                 )
 
