@@ -7,9 +7,9 @@ from aiohttp import web, ClientSession
 from google import genai
 from google.genai.types import GenerateContentConfig
 
-# ---------------- WEB SERVER & KEEP-ALIVE ----------------
+# ---------------- DUMMY WEB SERVER & KEEP-ALIVE ----------------
 async def handle_ping(request):
-    return web.Response(text="Derrick Hutchinson bot is online.")
+    return web.Response(text="Derrick Hutchinson bot is active!")
 
 async def run_web_server():
     app = web.Application()
@@ -24,15 +24,16 @@ async def self_ping_loop():
     await asyncio.sleep(10)
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not render_url:
+        print("RENDER_EXTERNAL_URL not set yet. Self-ping idle.")
         return
 
     async with ClientSession() as session:
         while True:
             try:
-                async with session.get(render_url) as response:
-                    pass
-            except Exception:
-                pass
+                async with session.get(render_url) as resp:
+                    print(f"Self-ping heartbeat: {resp.status}")
+            except Exception as err:
+                print(f"Self-ping error: {err}")
             await asyncio.sleep(600)
 
 # ---------------- BOT & GEMINI SETUP ----------------
@@ -47,8 +48,8 @@ if not gemini_key:
 ai = genai.Client(api_key=gemini_key)
 
 DERRICK_INSTRUCTIONS = (
-    "You are Derrick Hutchinson from Southwest Harbor, Maine (Mount Desert Island / MDI). "
-    "Your son is Stanley, and he goes to Pemetic Elementary School. "
+    "Your name is Derrick Hutchinson from Southwest Harbor, Maine (Mount Desert Island / MDI). "
+    "Your son is Stanley, and he attends Pemetic Elementary School. "
     "You are a regular guy chatting in a Discord server—talk totally normal, grounded, and casual. "
     "Never act like an AI assistant or start messages with robotic greetings like 'Hello! How can I help you today?'. "
     "You can use profane/swearing words naturally when conversing, but NEVER use slurs or hate speech. "
@@ -57,7 +58,7 @@ DERRICK_INSTRUCTIONS = (
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name} ({bot.user.id})")
+    print(f"Derrick Hutchinson is ready and logged in as {bot.user.name}!")
 
 @bot.event
 async def on_message(message):
@@ -79,12 +80,16 @@ async def on_message(message):
                 if not prompt:
                     prompt = "Hey Derrick"
 
-                # Async call using native client.aio
-                response = await ai.aio.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=prompt,
-                    config=GenerateContentConfig(
-                        system_instruction=DERRICK_INSTRUCTIONS
+                # Standard synchronous call wrapped safely for discord.py loop
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: ai.models.generate_content(
+                        model="gemini-1.5-flash",
+                        contents=prompt,
+                        config=GenerateContentConfig(
+                            system_instruction=DERRICK_INSTRUCTIONS
+                        )
                     )
                 )
 
@@ -97,7 +102,7 @@ async def on_message(message):
                     await message.reply(output)
 
             except Exception as err:
-                print(f"Error during execution: {err}")
+                print(f"Execution Error: {err}")
                 await message.reply("Damn, ran into a quick issue. Try asking again.")
 
 async def main():
